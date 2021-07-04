@@ -1,7 +1,9 @@
 use async_std::{
     fs::{copy, create_dir_all},
     io::{self, prelude::WriteExt},
+    path::Path,
 };
+use indicatif::ProgressBar;
 use std::env;
 
 use anyhow::Result;
@@ -14,7 +16,8 @@ struct Asset {
     hash: String,
 }
 
-fn main() -> Result<()> {
+#[async_std::main]
+async fn main() -> Result<()> {
     let sql_path = env::args().nth(1).expect("Please specify meta file path.");
 
     let conn = Connection::open(&sql_path)?;
@@ -28,8 +31,8 @@ fn main() -> Result<()> {
         })
     })?;
 
-    let dest = std::path::Path::new("dest");
-    std::fs::create_dir_all(dest)?;
+    let dest = Path::new("dest");
+    create_dir_all(dest).await?;
 
     let mut tasks = vec![];
     for asset in asset_iter {
@@ -42,7 +45,7 @@ fn main() -> Result<()> {
         tasks.push(async_std::task::spawn(async move {
             let asset_dest_path = dest.join(&asset.name);
             let asset_dest_dir = asset_dest_path.parent().unwrap();
-            let asset_dir_path = std::path::Path::new(&sql_path).parent().unwrap();
+            let asset_dir_path = Path::new(&sql_path).parent().unwrap();
 
             create_dir_all(asset_dest_dir).await?;
             let asset_path = asset_dir_path
@@ -65,13 +68,17 @@ fn main() -> Result<()> {
     }
 
     println!("found {} resources", tasks.len());
+    let pb = ProgressBar::new(tasks.len() as u64);
 
     println!("ready...");
-    task::block_on(async move {
+    let pb = task::block_on(async move {
         for task in tasks.into_iter() {
             task.await.unwrap();
+            pb.inc(1);
         }
+        pb
     });
+    pb.finish_with_message("done");
 
     Ok(())
 }
