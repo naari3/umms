@@ -92,6 +92,11 @@ async fn main() -> Result<()> {
     for entry in glob::glob("./dest/**/*.awb").expect("Failed to read glob pattern") {
         match entry {
             Ok(path) => {
+                create_dir_all(
+                    dest.join("wav")
+                        .join(path.clone().parent().unwrap().strip_prefix("dest").unwrap()),
+                )
+                .await?;
                 let output = Command::new(".\\vgmstream-win\\test.exe")
                     .args(&["-m", path.to_str().unwrap()])
                     .output()
@@ -100,14 +105,36 @@ async fn main() -> Result<()> {
                 let re = Regex::new(r"stream count: (\d+)")?;
                 let caps = match re.captures(&metainfo_string) {
                     Some(caps) => caps,
-                    None => continue,
+                    None => {
+                        tasks.push(async_std::task::spawn(async move {
+                            Command::new(".\\vgmstream-win\\test.exe")
+                                .args(&[
+                                    path.clone().to_str().unwrap(),
+                                    "-o",
+                                    &format!(
+                                        "dest/wav/{}/?n.wav",
+                                        path.clone()
+                                            .parent()
+                                            .unwrap()
+                                            .strip_prefix("dest")
+                                            .unwrap()
+                                            .to_string_lossy()
+                                    ),
+                                ])
+                                .output()
+                                .await
+                                .unwrap();
+                        }));
+                        continue;
+                    }
                 };
+                // multi stream strip
                 let stream_count: u32 = caps.get(1).unwrap().as_str().parse()?;
-                create_dir_all(dest.join("wav").join(path.clone().parent().unwrap())).await?;
+
                 for i in 1..stream_count + 1 {
                     let path = path.clone();
                     tasks.push(async_std::task::spawn(async move {
-                        let status = Command::new(".\\vgmstream-win\\test.exe")
+                        Command::new(".\\vgmstream-win\\test.exe")
                             .args(&[
                                 "-s",
                                 &i.to_string(),
@@ -115,15 +142,17 @@ async fn main() -> Result<()> {
                                 "-o",
                                 &format!(
                                     "dest/wav/{}/?n_?s.wav",
-                                    path.clone().parent().unwrap().to_string_lossy()
+                                    path.clone()
+                                        .parent()
+                                        .unwrap()
+                                        .strip_prefix("dest")
+                                        .unwrap()
+                                        .to_string_lossy()
                                 ),
                             ])
-                            .status()
+                            .output()
                             .await
                             .unwrap();
-                        if !status.success() {
-                            println!("failed {:?}", path);
-                        }
                     }));
                 }
             }
